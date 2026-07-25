@@ -429,7 +429,7 @@ export ZINK_DESCRIPTORS=lazy
 export MESA_VK_WSI_PRESENT_MODE=immediate
 [ -f /usr/share/vulkan/icd.d.termux/freedreno_icd.aarch64.json ] && \
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d.termux/freedreno_icd.aarch64.json
-export XDG_DATA_DIRS=/usr/share:/usr/local/share:${XDG_DATA_DIRS}
+export XDG_DATA_DIRS=/usr/share:/usr/local/share:\${XDG_DATA_DIRS}
 export PS1="\[\033[01;32m\]${SETUP_USERNAME}@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
 echo ""
 echo " User: ${SETUP_USERNAME} | GPU: GALLIUM=\${GALLIUM_DRIVER}"
