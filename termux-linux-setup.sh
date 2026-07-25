@@ -12,6 +12,9 @@
 #  - Python & Web Dev environment
 #######################################################
 
+set -euo pipefail
+IFS=$'\n\t'
+
 # ============== CONFIGURATION ==============
 TOTAL_STEPS=12
 CURRENT_STEP=0
@@ -152,8 +155,21 @@ setup_environment() {
     # echo -e "\n${GREEN}[+] Selected: ${DE_NAME}${NC}"
 
     # ---- Username ----
-    SETUP_USERNAME="root"
-    echo -e "  ${GREEN}[+] Proot User set to: ${SETUP_USERNAME} (Default)${NC}"
+    DEFAULT_USER="user"
+    PROOT_DISTRO="ubuntu"
+
+    echo -e "  [*] Checking Proot container..."
+    if proot-distro login "${PROOT_DISTRO}" -- true >/dev/null 2>&1; then
+        EXISTING_USER=$(proot-distro login "${PROOT_DISTRO}" -- awk -F: '$3 == 1000 {print $1}' /etc/passwd 2>/dev/null)
+        if [[ -n "${EXISTING_USER}" ]]; then
+            DEFAULT_USER="${EXISTING_USER}"
+            echo -e "  [*] Detected existing user: ${WHITE}${DEFAULT_USER}${NC}"
+        fi
+    fi
+
+    read -p "  Enter username for Proot [default: ${DEFAULT_USER}]: " USER_INPUT
+    SETUP_USERNAME="${USER_INPUT:-$DEFAULT_USER}"
+    echo -e "  ${GREEN}[+] Proot User set to: ${SETUP_USERNAME}${NC}"
     sleep 1
 }
 
@@ -263,7 +279,7 @@ step_python() {
     echo -e "  [+] Python 3 installed"
 }
 
-# ============== STEP 9: PROOT ==============
+# ============== STEP 9: PROOT (FIXED) ==============
 step_proot() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Setting up Proot Container...${NC}"
@@ -296,51 +312,90 @@ step_proot() {
     #     3) PROOT_DISTRO="kali-nethunter"; PROOT_LABEL="Kali Linux";;
     # esac
 
-    echo -e "\n${GREEN}[+] Installing ${PROOT_LABEL}...${NC}"
-    (proot-distro install "$PROOT_DISTRO" > /dev/null 2>&1) &
-    spinner $! "Downloading ${PROOT_LABEL} rootfs (may take a while)..."
+    echo ""
+    echo -e "${GREEN}[+] Proot distro: ${PROOT_LABEL}${NC}"
+
+    # Check if distro already installed (using login test, not directory probing)
+    if proot-distro login "$PROOT_DISTRO" -- true >/dev/null 2>&1; then
+        echo -e "  [+] ${PROOT_LABEL} already installed."
+    else
+        echo -e "\n${GREEN}[+] Installing ${PROOT_LABEL}...${NC}"
+        (proot-distro install "$PROOT_DISTRO" >/dev/null 2>&1) &
+        INSTALL_PID=$!
+        spinner "$INSTALL_PID" "Downloading ${PROOT_LABEL} rootfs (may take a while)..."
+        if ! proot-distro login "$PROOT_DISTRO" -- true >/dev/null 2>&1; then
+            echo -e "${RED}[!] Failed to install ${PROOT_LABEL}.${NC}"
+            return 1
+        fi
+        echo -e "  [+] ${PROOT_LABEL} installed successfully."
+    fi
 
     echo -e "  [*] Bootstrapping ${PROOT_LABEL}..."
+    BOOTSTRAP_LOG="$HOME/proot-bootstrap.log"
     proot-distro login "$PROOT_DISTRO" -- bash -c "
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -y -q > /dev/null 2>&1
+        echo '[*] Updating packages...'
+        apt-get update -y -q || { echo 'FAIL: apt update' >&2; exit 1; }
+        echo '[*] Installing core packages...'
         apt-get install -y -q --no-install-recommends \
             mesa-utils vulkan-tools \
-            libgl1-mesa-glx libvulkan1 libgles2 \
+            libgl1 libglx-mesa0 libvulkan1 libgles2 \
             xfce4 xfce4-terminal dbus-x11 \
-            sudo curl wget git htop nano > /dev/null 2>&1
-    " 2>/dev/null || true
-    echo -e "  [+] ${PROOT_LABEL} ready."
+            sudo curl wget git htop nano || { echo 'FAIL: apt install' >&2; exit 1; }
+        echo '[*] Bootstrap complete.'
+    " > "$BOOTSTRAP_LOG" 2>&1
+
+    if grep -q 'FAIL' "$BOOTSTRAP_LOG" 2>/dev/null; then
+        echo -e "${RED}[!] Bootstrap FAILED — check $BOOTSTRAP_LOG${NC}"
+        exit 1
+    else
+        echo -e "  [+] ${PROOT_LABEL} ready."
+        rm -f "$BOOTSTRAP_LOG"   # clean up on success
+    fi
 
     # ---- Create named user with working sudo ----
     echo -e "  [*] Creating proot user: ${SETUP_USERNAME} (with sudo)..."
-    proot-distro login "$PROOT_DISTRO" -- bash -c "
-        # Create user if not exists
-        id '$SETUP_USERNAME' > /dev/null 2>&1 || \
-            useradd -m -s /bin/bash '$SETUP_USERNAME'
+    USER_SETUP_LOG="$HOME/proot-user-setup.log"
+    proot-distro login "$PROOT_DISTRO" -- bash <<EOF > "$USER_SETUP_LOG" 2>&1
+set -e
+# Create user if not exists
+id '$SETUP_USERNAME' > /dev/null 2>&1 || \
+    useradd -m -s /bin/bash '$SETUP_USERNAME'
 
-        # Add to sudo group
-        usermod -aG sudo '$SETUP_USERNAME' 2>/dev/null || true
+# Add to sudo group
+usermod -aG sudo '$SETUP_USERNAME' 2>/dev/null || true
 
-        # Drop-in sudoers file (cleaner than editing /etc/sudoers directly)
-        # Defaults !requiretty  — allows sudo without a real terminal (proot)
-        # NOPASSWD            — no password prompt
-        mkdir -p /etc/sudoers.d
-        echo 'Defaults !requiretty' > /etc/sudoers.d/proot-compat
-        echo '$SETUP_USERNAME ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers.d/proot-compat
-        chmod 0440 /etc/sudoers.d/proot-compat
+# Drop-in sudoers file (cleaner than editing /etc/sudoers directly)
+# Defaults !requiretty  — allows sudo without a real terminal (proot)
+# NOPASSWD            — no password prompt
+mkdir -p /etc/sudoers.d
+cat > /etc/sudoers.d/proot-compat <<SUDO
+Defaults !requiretty
+$SETUP_USERNAME ALL=(ALL) NOPASSWD: ALL
+SUDO
+chmod 0440 /etc/sudoers.d/proot-compat
 
-        # Ensure sudo binary has correct permissions (SETUID)
-        chmod u+s /usr/bin/sudo 2>/dev/null || true
+# Ensure sudo binary has correct permissions (SETUID)
+chmod u+s /usr/bin/sudo 2>/dev/null || true
 
-        # Nice coloured shell prompt
-        echo 'export PS1="\[\033[01;32m\]${SETUP_USERNAME}@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "' \
-            >> /home/'$SETUP_USERNAME'/.bashrc
-        # Useful aliases
-        echo 'alias ll="ls -la"' >> /home/'$SETUP_USERNAME'/.bashrc
-        echo 'alias update="sudo apt update && sudo apt upgrade -y"' >> /home/'$SETUP_USERNAME'/.bashrc
-    " 2>/dev/null || true
-    echo -e "  [+] Proot user '${SETUP_USERNAME}' created with passwordless sudo"
+# Get actual home directory (works for root or normal user)
+HOME_DIR=\$(getent passwd '$SETUP_USERNAME' | cut -d: -f6)
+
+# Nice coloured shell prompt + aliases
+cat >> "\$HOME_DIR/.bashrc" <<'BASHRC'
+export PS1="\[\033[01;32m\]${SETUP_USERNAME}@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
+alias ll='ls -la'
+alias update='sudo apt update && sudo apt upgrade -y'
+BASHRC
+EOF
+
+    if [ $? -eq 0 ]; then
+        echo -e "  [+] Proot user '${SETUP_USERNAME}' created with passwordless sudo"
+        rm -f "$USER_SETUP_LOG"
+    else
+        echo -e "${RED}[!] User setup FAILED — check $USER_SETUP_LOG${NC}"
+        return 1
+    fi
 
     PROOT_BIN="/data/data/com.termux/files/usr/bin/proot-distro"
     TERMUX_VK_ICD="/data/data/com.termux/files/usr/share/vulkan/icd.d"
@@ -368,7 +423,8 @@ BINDS=""
     BINDS="\$BINDS --bind ${TERMUX_LIB}/libvulkan.so:/usr/lib/aarch64-linux-gnu/libvulkan_termux.so"
 
 _RC=\$(mktemp /data/data/com.termux/files/usr/tmp/proot_rc.XXXX)
-cat > "\$_RC" << 'RCEOF'
+echo "SETUP_USERNAME=\"${SETUP_USERNAME}\"" > "\$_RC"
+cat >> "\$_RC" << 'RCEOF'
 export DISPLAY=:0
 export MESA_NO_ERROR=1
 export MESA_GL_VERSION_OVERRIDE=4.6
@@ -380,23 +436,24 @@ export ZINK_DESCRIPTORS=lazy
 export MESA_VK_WSI_PRESENT_MODE=immediate
 [ -f /usr/share/vulkan/icd.d.termux/freedreno_icd.aarch64.json ] && \
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d.termux/freedreno_icd.aarch64.json
-export XDG_DATA_DIRS=/usr/share:/usr/local/share:\${XDG_DATA_DIRS}
-export PS1="\[\033[01;32m\]$SETUP_USERNAME@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
+export XDG_DATA_DIRS=/usr/share:/usr/local/share:${XDG_DATA_DIRS}
+export PS1="\[\033[01;32m\]${SETUP_USERNAME}@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
 echo ""
-echo " User: $SETUP_USERNAME | GPU: GALLIUM=\${GALLIUM_DRIVER}"
+echo " User: ${SETUP_USERNAME} | GPU: GALLIUM=\${GALLIUM_DRIVER}"
 echo " Type 'exit' to leave proot."
 echo ""
 RCEOF
 
-proot-distro login "\$PROOT_DISTRO" \$BINDS --user root -- bash --rcfile "\$_RC"
+proot-distro login "\$PROOT_DISTRO" \$BINDS --user ${SETUP_USERNAME} -- bash --rcfile "\$_RC"
 rm -f "\$_RC"
 PROOTEOF
     chmod +x ~/start-proot.sh
     echo -e "  [+] Created ~/start-proot.sh"
 
-    # ---- proot-menu-sync.sh (v3 — embedded) ----
-    cat > ~/proot-menu-sync.sh << 'SYNCEOF'
-#!/data/data/com.termux/files/usr/bin/bash
+    # ---- proot-menu-sync.sh (v3 — embedded, fixed rootfs path, fixed long lines) ----
+    echo "#!/data/data/com.termux/files/usr/bin/bash" > ~/proot-menu-sync.sh
+    echo "SETUP_USERNAME=\"${SETUP_USERNAME}\"" >> ~/proot-menu-sync.sh
+    cat >> ~/proot-menu-sync.sh << 'SYNCEOF'
 # ============================================================
 #  Proot App Menu Bridge v3
 #  Syncs proot .desktop files into native XFCE menu.
@@ -406,7 +463,7 @@ PROOTEOF
 
 PROOT_DISTRO="${1:-ubuntu}"
 PROOT_BIN="/data/data/com.termux/files/usr/bin/proot-distro"
-PROOT_ROOTFS="/data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs/$PROOT_DISTRO"
+PROOT_ROOTFS="/data/data/com.termux/files/usr/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs"
 PROOT_APPS="$PROOT_ROOTFS/usr/share/applications"
 BRIDGE_DIR="$HOME/.local/share/applications/proot-bridge"
 WRAPPER_DIR="$HOME/.local/share/proot-wrappers"
@@ -416,8 +473,8 @@ if [ ! -f "$PROOT_BIN" ]; then
     echo "[!] proot-distro not found. pkg install proot-distro"
     exit 1
 fi
-if [ ! -d "$PROOT_ROOTFS" ]; then
-    echo "[!] Proot distro '$PROOT_DISTRO' not installed."
+if ! "$PROOT_BIN" login "$PROOT_DISTRO" -- true >/dev/null 2>&1; then
+    echo "[!] Proot distro '$PROOT_DISTRO' not installed or not reachable."
     exit 1
 fi
 if [ ! -d "$PROOT_APPS" ]; then
@@ -497,7 +554,7 @@ X11_DIR="\$TERMUX_TMP/.X11-unix"
 {
 echo "[+] Launching $appname at \$(date)"
 echo "    X11=\$X11_DIR  BINDS=\$BINDS"
-\$PROOT_BIN login "\$PROOT_DISTRO" \$BINDS -- /bin/bash -c "
+\$PROOT_BIN login "\$PROOT_DISTRO" \$BINDS --user ${SETUP_USERNAME} -- /bin/bash -c "
 export DISPLAY=:0
 export XDG_RUNTIME_DIR=/tmp
 export MESA_NO_ERROR=1
@@ -537,7 +594,6 @@ SYNCEOF
     chmod +x ~/proot-menu-sync.sh
     echo -e "  [+] Created ~/proot-menu-sync.sh"
 
-    # Run once during install
     bash ~/proot-menu-sync.sh "$PROOT_DISTRO" 2>/dev/null || true
 }
 
@@ -823,12 +879,12 @@ rm -f "$HOME/.config/autostart/xfce-first-run.desktop"
 FREOF
     chmod +x ~/.config/xfce-first-run.sh
 
-    # Register as XFCE autostart (one-shot)
+    # Register as XFCE autostart (one-shot) — fixed path
     cat > ~/.config/autostart/xfce-first-run.desktop << 'AREOF'
 [Desktop Entry]
 Type=Application
 Name=XFCE First Run Setup
-Exec=bash /root/.config/xfce-first-run.sh
+Exec=bash ~/.config/xfce-first-run.sh
 Hidden=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
@@ -877,7 +933,7 @@ AREOF
     echo -e "  [+] First-run script will configure panels on first launch"
 }
 
-# ============== STEP 12: SHORTCUTS ==============
+# ============== STEP 12: SHORTCUTS (FIXED PROOT PATH) ==============
 step_shortcuts() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Creating Desktop Shortcuts...${NC}"
@@ -917,7 +973,7 @@ EOF
 [Desktop Entry]
 Name=Linux Container
 Comment=Open Proot Shell with GPU support
-Exec=${term_cmd} -e "bash /root/start-proot.sh"
+Exec=${term_cmd} -e "bash ~/start-proot.sh"
 Icon=system-run
 Type=Application
 Terminal=false
@@ -1091,10 +1147,10 @@ main() {
     # Optional VNC — asked after all main steps
     step_vnc_optional
 
-    # Apply username to native Termux shell prompt
+    # Apply username to native Termux shell prompt (fixed)
     BASHRC="$HOME/.bashrc"
     grep -q "SETUP_USERNAME_PROMPT" "$BASHRC" 2>/dev/null || \
-        echo "# SETUP_USERNAME_PROMPT\nexport PS1='\[\033[01;32m\]${SETUP_USERNAME}@android\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '" >> "$BASHRC"
+        echo -e "# SETUP_USERNAME_PROMPT\nexport PS1='\\[\\e[01;32m\\]${SETUP_USERNAME}@android\\[\\e[00m\\]:\\[\\e[01;34m\\]\\w\\[\\e[00m\\]\\$ '" >> "$BASHRC"
     source "$BASHRC" 2>/dev/null || true
 
     show_completion
