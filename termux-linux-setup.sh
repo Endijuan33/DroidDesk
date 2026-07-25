@@ -225,7 +225,7 @@ step_gpu() {
     if [ "$GPU_DRIVER" == "freedreno" ]; then
         install_pkg "mesa-vulkan-icd-freedreno" "Turnip Adreno Driver"
     fi
-    install_pkg "vulkan-loader-android" "Vulkan Loader"
+    install_pkg "vulkan-loader" "Vulkan Loader"
 }
 
 # ============== STEP 6: AUDIO ==============
