@@ -275,12 +275,12 @@ step_proot() {
     echo ""
     # ── Hardcoded to Ubuntu (DroidDesk default) ──
     PROOT_DISTRO="ubuntu"
-    PROOT_LABEL="Ubuntu 22.04"
+    PROOT_LABEL="Ubuntu 24.04"
     echo -e "${GREEN}[+] Proot distro: ${PROOT_LABEL} (default)${NC}"
 
     # --- Multi-distro selection (commented out for now) ---
     # echo -e "${CYAN}Choose a Linux distro for Proot:${NC}"
-    # echo -e "  ${WHITE}1) Ubuntu 22.04 LTS${NC}  (Recommended)"
+    # echo -e "  ${WHITE}1) Ubuntu 24.04 LTS${NC}  (Recommended)"
     # echo -e "  ${WHITE}2) Debian 12${NC}          (Minimal)"
     # echo -e "  ${WHITE}3) Kali Linux${NC}         (Security/Pentesting)"
     # echo ""
@@ -291,7 +291,7 @@ step_proot() {
     #     echo "Please enter 1, 2, or 3."
     # done
     # case $PROOT_INPUT in
-    #     1) PROOT_DISTRO="ubuntu";         PROOT_LABEL="Ubuntu 22.04";;
+    #     1) PROOT_DISTRO="ubuntu";         PROOT_LABEL="Ubuntu 24.04";;
     #     2) PROOT_DISTRO="debian";         PROOT_LABEL="Debian 12";;
     #     3) PROOT_DISTRO="kali-nethunter"; PROOT_LABEL="Kali Linux";;
     # esac
@@ -1024,7 +1024,7 @@ show_completion() {
     echo -e "${GREEN}"
     cat << 'COMPLETE'
     ╔══════════════════════════════════════════╗
-    ║       INSTALLATION COMPLETE!             ║
+    ║            INSTALLATION COMPLETE!               ║
     ╚══════════════════════════════════════════╝
 COMPLETE
     echo -e "${NC}"
