@@ -279,7 +279,7 @@ step_python() {
     echo -e "  [+] Python 3 installed"
 }
 
-# ============== STEP 9: PROOT (FIXED) ==============
+# ============== STEP 9: PROOT ==============
 step_proot() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Setting up Proot Container...${NC}"
@@ -330,20 +330,19 @@ step_proot() {
         echo -e "  [+] ${PROOT_LABEL} installed successfully."
     fi
 
-    echo -e "  [*] Bootstrapping ${PROOT_LABEL}..."
     BOOTSTRAP_LOG="$HOME/proot-bootstrap.log"
-    proot-distro login "$PROOT_DISTRO" -- bash -c "
-        export DEBIAN_FRONTEND=noninteractive
-        echo '[*] Updating packages...'
-        apt-get update -y -q || { echo 'FAIL: apt update' >&2; exit 1; }
-        echo '[*] Installing core packages...'
-        apt-get install -y -q --no-install-recommends \
-            mesa-utils vulkan-tools \
-            libgl1 libglx-mesa0 libvulkan1 libgles2 \
-            xfce4 xfce4-terminal dbus-x11 \
-            sudo curl wget git htop nano || { echo 'FAIL: apt install' >&2; exit 1; }
-        echo '[*] Bootstrap complete.'
-    " > "$BOOTSTRAP_LOG" 2>&1
+    (
+        proot-distro login "$PROOT_DISTRO" -- bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -y -q || { echo 'FAIL: apt update' >&2; exit 1; }
+            apt-get install -y -q --no-install-recommends \
+                mesa-utils vulkan-tools \
+                libgl1 libglx-mesa0 libvulkan1 libgles2 \
+                xfce4 xfce4-terminal dbus-x11 \
+                sudo curl wget git htop nano || { echo 'FAIL: apt install' >&2; exit 1; }
+        " > "$BOOTSTRAP_LOG" 2>&1
+    ) &
+    spinner $! "Bootstrapping ${PROOT_LABEL} packages..."
 
     if grep -q 'FAIL' "$BOOTSTRAP_LOG" 2>/dev/null; then
         echo -e "${RED}[!] Bootstrap FAILED — check $BOOTSTRAP_LOG${NC}"
@@ -354,20 +353,15 @@ step_proot() {
     fi
 
     # ---- Create named user with working sudo ----
-    echo -e "  [*] Creating proot user: ${SETUP_USERNAME} (with sudo)..."
     USER_SETUP_LOG="$HOME/proot-user-setup.log"
-    proot-distro login "$PROOT_DISTRO" -- bash <<EOF > "$USER_SETUP_LOG" 2>&1
+    (
+        proot-distro login "$PROOT_DISTRO" -- bash <<EOF > "$USER_SETUP_LOG" 2>&1
 set -e
-# Create user if not exists
 id '$SETUP_USERNAME' > /dev/null 2>&1 || \
     useradd -m -s /bin/bash '$SETUP_USERNAME'
 
-# Add to sudo group
 usermod -aG sudo '$SETUP_USERNAME' 2>/dev/null || true
 
-# Drop-in sudoers file (cleaner than editing /etc/sudoers directly)
-# Defaults !requiretty  — allows sudo without a real terminal (proot)
-# NOPASSWD            — no password prompt
 mkdir -p /etc/sudoers.d
 cat > /etc/sudoers.d/proot-compat <<SUDO
 Defaults !requiretty
@@ -375,19 +369,18 @@ $SETUP_USERNAME ALL=(ALL) NOPASSWD: ALL
 SUDO
 chmod 0440 /etc/sudoers.d/proot-compat
 
-# Ensure sudo binary has correct permissions (SETUID)
 chmod u+s /usr/bin/sudo 2>/dev/null || true
 
-# Get actual home directory (works for root or normal user)
 HOME_DIR=\$(getent passwd '$SETUP_USERNAME' | cut -d: -f6)
 
-# Nice coloured shell prompt + aliases
 cat >> "\$HOME_DIR/.bashrc" <<'BASHRC'
 export PS1="\[\033[01;32m\]${SETUP_USERNAME}@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
 alias ll='ls -la'
 alias update='sudo apt update && sudo apt upgrade -y'
 BASHRC
 EOF
+    ) &
+    spinner $! "Creating proot user '${SETUP_USERNAME}' with sudo..."
 
     if [ $? -eq 0 ]; then
         echo -e "  [+] Proot user '${SETUP_USERNAME}' created with passwordless sudo"
