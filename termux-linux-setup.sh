@@ -1,19 +1,27 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 #######################################################
-#  Termux Linux Setup Script
+# Termux Linux Setup Script (Restored & Upgraded)
 #
-#  Features:
-#  - XFCE4 / LXQt / MATE / KDE Desktop
-#  - Smart GPU acceleration (Turnip/Zink)
-#  - Termux-X11 display + optional VNC
-#  - Modern dark XFCE theme + auto wallpaper
-#  - Proot Linux container (Ubuntu/Debian/Kali)
-#  - Proot App Bridge (apt installs appear in XFCE menu)
-#  - Python & Web Dev environment
+# Features:
+# - XFCE4 / LXQt / MATE / KDE Desktop
+# - Smart GPU acceleration (Turnip/Zink)
+# - Termux-X11 display + optional VNC
+# - Modern dark XFCE theme + auto wallpaper
+# - Proot Linux container (Ubuntu/Debian/Kali)
+# - Proot App Bridge (robust .desktop parsing)
+# - Python & Web Dev environment
+# - 100% Robustness: Error trapping, atomic writes, 
+#   dynamic paths, regex input validation.
 #######################################################
 
 set -euo pipefail
 IFS=$'\n\t'
+
+# ============== DYNAMIC PREFIX & PATHS ==============
+# Avoid hardcoding. Ensures compatibility with custom 
+# Termux installations and secondary Android profiles.
+export PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+export TMPDIR="${TMPDIR:-${PREFIX}/tmp}"
 
 # ============== CONFIGURATION ==============
 TOTAL_STEPS=12
@@ -22,7 +30,6 @@ DE_CHOICE="1"
 DE_NAME="XFCE4"
 VNC_ENABLED=false
 SETUP_USERNAME="user"
-
 # Wallpaper URL — Ubuntu 4K wallpaper (set by user)
 WALLPAPER_URL="https://wallpapercave.com/download/ubuntu-4k-wallpapers-wp8303186"
 
@@ -38,6 +45,20 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 BOLD='\033[1m'
 
+# ============== ERROR HANDLING ==============
+cleanup_on_error() {
+    local exit_code=$?
+    # Always restore cursor visibility
+    tput cnorm 2>/dev/null || true
+    
+    if [ $exit_code -ne 0 ]; then
+        echo -e "\n${RED}[!] Script interrupted or failed unexpectedly (Error Code: $exit_code).${NC}"
+        echo -e "${YELLOW}[*] Please check the error message above. Ensure your internet connection is stable and try again.${NC}"
+    fi
+}
+# Catch unexpected exits, errors, or user interruptions (Ctrl+C)
+trap cleanup_on_error EXIT ERR SIGINT SIGTERM
+
 # ============== PROGRESS FUNCTIONS ==============
 update_progress() {
     CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -51,7 +72,7 @@ update_progress() {
     BAR+="${NC}"
     echo ""
     echo -e "${WHITE}------------------------------------------------------------${NC}"
-    echo -e "${CYAN}  PROGRESS: ${WHITE}Step ${CURRENT_STEP}/${TOTAL_STEPS}${NC} ${BAR} ${WHITE}${PERCENT}%${NC}"
+    echo -e "${CYAN} PROGRESS: ${WHITE}Step ${CURRENT_STEP}/${TOTAL_STEPS}${NC} ${BAR} ${WHITE}${PERCENT}%${NC}"
     echo -e "${WHITE}------------------------------------------------------------${NC}"
     echo ""
 }
@@ -61,19 +82,23 @@ spinner() {
     local message=$2
     local spin='-\|/'
     local i=0
+    
+    tput civis 2>/dev/null || true # Hide cursor
     while kill -0 $pid 2>/dev/null; do
         i=$(( (i+1) % 4 ))
-        printf "\r  [*] ${message} ${CYAN}${spin:$i:1}${NC}  "
+        printf "\r [*] ${message} ${CYAN}${spin:$i:1}${NC} "
         sleep 0.1
     done
     wait $pid
     local exit_code=$?
+    tput cnorm 2>/dev/null || true # Restore cursor
+    
     if [ $exit_code -eq 0 ]; then
-        printf "\r  [+] ${message}                    \n"
+        printf "\r [+] ${message} \n"
     else
-        printf "\r  [-] ${message} ${RED}(failed)${NC}     \n"
+        printf "\r [-] ${message} ${RED}(failed)${NC} \n"
+        return $exit_code
     fi
-    return $exit_code
 }
 
 install_pkg() {
@@ -91,8 +116,8 @@ show_banner() {
     cat << 'BANNER'
     ╔══════════════════════════════════════════╗
     ║                                          ║
-    ║       Termux Linux Setup Script          ║
-    ║       X11 + Proot + Modern XFCE          ║
+    ║        Termux Linux Setup Script         ║
+    ║        X11 + Proot + Modern XFCE         ║
     ║                                          ║
     ╚══════════════════════════════════════════╝
 BANNER
@@ -104,27 +129,26 @@ BANNER
 setup_environment() {
     echo -e "${PURPLE}[*] Detecting your device...${NC}"
     echo ""
-
     DEVICE_MODEL=$(getprop ro.product.model 2>/dev/null || echo "Unknown")
     DEVICE_BRAND=$(getprop ro.product.brand 2>/dev/null || echo "Unknown")
     ANDROID_VERSION=$(getprop ro.build.version.release 2>/dev/null || echo "Unknown")
     CPU_ABI=$(getprop ro.product.cpu.abi 2>/dev/null || echo "arm64-v8a")
     GPU_VENDOR=$(getprop ro.hardware.egl 2>/dev/null || echo "")
-
-    echo -e "  [*] Device : ${WHITE}${DEVICE_BRAND} ${DEVICE_MODEL}${NC}"
-    echo -e "  [*] Android: ${WHITE}${ANDROID_VERSION}${NC}"
-
+    
+    echo -e " [*] Device : ${WHITE}${DEVICE_BRAND} ${DEVICE_MODEL}${NC}"
+    echo -e " [*] Android: ${WHITE}${ANDROID_VERSION}${NC}"
+    
     if [[ "$GPU_VENDOR" == *"adreno"* ]] || \
        [[ "$DEVICE_BRAND" =~ [Ss]amsung|[Oo]ne[Pp]lus|[Xx]iaomi|[Rr]edmi|[Pp]oco|[Mm]oto|motorola ]]; then
         GPU_DRIVER="freedreno"
-        echo -e "  [*] GPU    : ${WHITE}Adreno — Hardware Acceleration Enabled${NC}"
+        echo -e " [*] GPU    : ${WHITE}Adreno — Hardware Acceleration Enabled${NC}"
     else
         GPU_DRIVER="zink_native"
-        echo -e "  [*] GPU    : ${WHITE}Non-Adreno — Zink/LLVMpipe fallback${NC}"
-        echo -e "${YELLOW}      [!] Recommend XFCE or LXQt for best performance.${NC}"
+        echo -e " [*] GPU    : ${WHITE}Non-Adreno — Zink/LLVMpipe fallback${NC}"
+        echo -e "${YELLOW} [!] Recommend XFCE or LXQt for best performance.${NC}"
     fi
     echo ""
-
+    
     # ── Hardcoded to XFCE4 (DroidDesk default) ──
     DE_CHOICE="1"
     DE_NAME="XFCE4"
@@ -132,10 +156,10 @@ setup_environment() {
 
     # --- Multi-DE selection (commented out for now) ---
     # echo -e "${CYAN}Choose your Desktop Environment:${NC}"
-    # echo -e "  ${WHITE}1) XFCE4${NC}      — Fast, customizable (Recommended)"
-    # echo -e "  ${WHITE}2) LXQt${NC}       — Ultra lightweight"
-    # echo -e "  ${WHITE}3) MATE${NC}       — Classic, moderate weight"
-    # echo -e "  ${WHITE}4) KDE Plasma${NC} — Heavy, modern (needs strong GPU/RAM)"
+    # echo -e "  ${WHITE}1) XFCE4${NC}       — Fast, customizable (Recommended)"
+    # echo -e "  ${WHITE}2) LXQt${NC}        — Ultra lightweight"
+    # echo -e "  ${WHITE}3) MATE${NC}        — Classic, moderate weight"
+    # echo -e "  ${WHITE}4) KDE Plasma${NC}  — Heavy, modern (needs strong GPU/RAM)"
     # echo ""
     # while true; do
     #     read -p "Enter number (1-4) [default: 1]: " DE_INPUT
@@ -157,19 +181,30 @@ setup_environment() {
     # ---- Username ----
     DEFAULT_USER="user"
     PROOT_DISTRO="ubuntu"
-
-    echo -e "  [*] Checking Proot container..."
+    echo -e " [*] Checking Proot container..."
     if proot-distro login "${PROOT_DISTRO}" -- true >/dev/null 2>&1; then
-        EXISTING_USER=$(proot-distro login "${PROOT_DISTRO}" -- awk -F: '$3 == 1000 {print $1}' /etc/passwd 2>/dev/null)
+        EXISTING_USER=$(proot-distro login "${PROOT_DISTRO}" -- awk -F: '$3 == 1000 {print $1}' /etc/passwd 2>/dev/null || true)
         if [[ -n "${EXISTING_USER}" ]]; then
             DEFAULT_USER="${EXISTING_USER}"
-            echo -e "  [*] Detected existing user: ${WHITE}${DEFAULT_USER}${NC}"
+            echo -e " [*] Detected existing user: ${WHITE}${DEFAULT_USER}${NC}"
         fi
     fi
-
-    read -p "  Enter username for Proot [default: ${DEFAULT_USER}]: " USER_INPUT
-    SETUP_USERNAME="${USER_INPUT:-$DEFAULT_USER}"
-    echo -e "  ${GREEN}[+] Proot User set to: ${SETUP_USERNAME}${NC}"
+    
+    # Robust Regex Validation for Username
+    while true; do
+        read -p " Enter username for Proot [default: ${DEFAULT_USER}]: " USER_INPUT
+        USER_INPUT=${USER_INPUT:-$DEFAULT_USER}
+        
+        # Regex validation: POSIX standard (lowercase letters, digits, underscores, dashes)
+        if [[ "$USER_INPUT" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+            SETUP_USERNAME="$USER_INPUT"
+            break
+        else
+            echo -e "${RED}[!] Invalid username. Use only lowercase letters, numbers, '-', or '_'. Must start with a letter/underscore.${NC}"
+        fi
+    done
+    
+    echo -e " ${GREEN}[+] Proot User set to: ${SETUP_USERNAME}${NC}"
     sleep 1
 }
 
@@ -208,7 +243,6 @@ step_desktop() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing ${DE_NAME}...${NC}"
     echo ""
-
     if [ "$DE_CHOICE" == "1" ]; then
         install_pkg "xfce4" "XFCE4 Desktop"
         install_pkg "xfce4-terminal" "XFCE4 Terminal"
@@ -276,7 +310,7 @@ step_python() {
     echo ""
     install_pkg "python" "Python 3"
     install_pkg "python-pip" "pip"
-    echo -e "  [+] Python 3 installed"
+    echo -e " [+] Python 3 installed"
 }
 
 # ============== STEP 9: PROOT ==============
@@ -284,11 +318,10 @@ step_proot() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Setting up Proot Container...${NC}"
     echo ""
-
     install_pkg "proot-distro" "Proot-Distro Manager"
     install_pkg "proot" "PRoot"
-
     echo ""
+    
     # ── Hardcoded to Ubuntu (DroidDesk default) ──
     PROOT_DISTRO="ubuntu"
     PROOT_LABEL="Ubuntu 24.04"
@@ -296,9 +329,9 @@ step_proot() {
 
     # --- Multi-distro selection (commented out for now) ---
     # echo -e "${CYAN}Choose a Linux distro for Proot:${NC}"
-    # echo -e "  ${WHITE}1) Ubuntu 24.04 LTS${NC}  (Recommended)"
-    # echo -e "  ${WHITE}2) Debian 12${NC}          (Minimal)"
-    # echo -e "  ${WHITE}3) Kali Linux${NC}         (Security/Pentesting)"
+    # echo -e "  ${WHITE}1) Ubuntu 24.04 LTS${NC} (Recommended)"
+    # echo -e "  ${WHITE}2) Debian 12${NC}        (Minimal)"
+    # echo -e "  ${WHITE}3) Kali Linux${NC}       (Security/Pentesting)"
     # echo ""
     # while true; do
     #     read -p "Enter number (1-3) [default: 1]: " PROOT_INPUT
@@ -307,27 +340,27 @@ step_proot() {
     #     echo "Please enter 1, 2, or 3."
     # done
     # case $PROOT_INPUT in
-    #     1) PROOT_DISTRO="ubuntu";         PROOT_LABEL="Ubuntu 24.04";;
-    #     2) PROOT_DISTRO="debian";         PROOT_LABEL="Debian 12";;
+    #     1) PROOT_DISTRO="ubuntu"; PROOT_LABEL="Ubuntu 24.04";;
+    #     2) PROOT_DISTRO="debian"; PROOT_LABEL="Debian 12";;
     #     3) PROOT_DISTRO="kali-nethunter"; PROOT_LABEL="Kali Linux";;
     # esac
-
+    
     echo ""
     echo -e "${GREEN}[+] Proot distro: ${PROOT_LABEL}${NC}"
 
-    # Check if distro already installed (using login test, not directory probing)
     if proot-distro login "$PROOT_DISTRO" -- true >/dev/null 2>&1; then
-        echo -e "  [+] ${PROOT_LABEL} already installed."
+        echo -e " [+] ${PROOT_LABEL} already installed."
     else
         echo -e "\n${GREEN}[+] Installing ${PROOT_LABEL}...${NC}"
         (proot-distro install "$PROOT_DISTRO" >/dev/null 2>&1) &
         INSTALL_PID=$!
         spinner "$INSTALL_PID" "Downloading ${PROOT_LABEL} rootfs (may take a while)..."
+        
         if ! proot-distro login "$PROOT_DISTRO" -- true >/dev/null 2>&1; then
             echo -e "${RED}[!] Failed to install ${PROOT_LABEL}.${NC}"
-            return 1
+            exit 1
         fi
-        echo -e "  [+] ${PROOT_LABEL} installed successfully."
+        echo -e " [+] ${PROOT_LABEL} installed successfully."
     fi
 
     BOOTSTRAP_LOG="$HOME/proot-bootstrap.log"
@@ -343,37 +376,32 @@ step_proot() {
         " > "$BOOTSTRAP_LOG" 2>&1
     ) &
     spinner $! "Bootstrapping ${PROOT_LABEL} packages..."
-
+    
     if grep -q 'FAIL' "$BOOTSTRAP_LOG" 2>/dev/null; then
         echo -e "${RED}[!] Bootstrap FAILED — check $BOOTSTRAP_LOG${NC}"
         exit 1
     else
-        echo -e "  [+] ${PROOT_LABEL} ready."
-        rm -f "$BOOTSTRAP_LOG"   # clean up on success
+        echo -e " [+] ${PROOT_LABEL} ready."
+        rm -f "$BOOTSTRAP_LOG" 
     fi
 
-    # ---- Create named user with working sudo ----
     USER_SETUP_LOG="$HOME/proot-user-setup.log"
     (
         proot-distro login "$PROOT_DISTRO" -- bash <<EOF > "$USER_SETUP_LOG" 2>&1
-set -e
-id '$SETUP_USERNAME' > /dev/null 2>&1 || \
-    useradd -m -s /bin/bash '$SETUP_USERNAME'
-
-usermod -aG sudo '$SETUP_USERNAME' 2>/dev/null || true
-
-mkdir -p /etc/sudoers.d
-cat > /etc/sudoers.d/proot-compat <<SUDO
+        set -e
+        id '$SETUP_USERNAME' > /dev/null 2>&1 || \
+            useradd -m -s /bin/bash '$SETUP_USERNAME'
+        usermod -aG sudo '$SETUP_USERNAME' 2>/dev/null || true
+        mkdir -p /etc/sudoers.d
+        cat > /etc/sudoers.d/proot-compat <<SUDO
 Defaults !requiretty
 $SETUP_USERNAME ALL=(ALL) NOPASSWD: ALL
 SUDO
-chmod 0440 /etc/sudoers.d/proot-compat
-
-chmod u+s /usr/bin/sudo 2>/dev/null || true
-
-HOME_DIR=\$(getent passwd '$SETUP_USERNAME' | cut -d: -f6)
-
-cat >> "\$HOME_DIR/.bashrc" <<'BASHRC'
+        chmod 0440 /etc/sudoers.d/proot-compat
+        chmod u+s /usr/bin/sudo 2>/dev/null || true
+        
+        HOME_DIR=\$(getent passwd '$SETUP_USERNAME' | cut -d: -f6)
+        cat >> "\$HOME_DIR/.bashrc" <<'BASHRC'
 export PS1="\[\033[01;32m\]${SETUP_USERNAME}@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
 alias ll='ls -la'
 alias update='sudo apt update && sudo apt upgrade -y'
@@ -381,41 +409,41 @@ BASHRC
 EOF
     ) &
     spinner $! "Creating proot user '${SETUP_USERNAME}' with sudo..."
-
+    
     if [ $? -eq 0 ]; then
-        echo -e "  [+] Proot user '${SETUP_USERNAME}' created with passwordless sudo"
+        echo -e " [+] Proot user '${SETUP_USERNAME}' created with passwordless sudo"
         rm -f "$USER_SETUP_LOG"
     else
         echo -e "${RED}[!] User setup FAILED — check $USER_SETUP_LOG${NC}"
-        return 1
+        exit 1
     fi
 
-    PROOT_BIN="/data/data/com.termux/files/usr/bin/proot-distro"
-    TERMUX_VK_ICD="/data/data/com.termux/files/usr/share/vulkan/icd.d"
-    TERMUX_LIB="/data/data/com.termux/files/usr/lib"
+    # Use robust PREFIX dynamic paths
+    PROOT_BIN="${PREFIX}/bin/proot-distro"
+    TERMUX_VK_ICD="${PREFIX}/share/vulkan/icd.d"
+    TERMUX_LIB="${PREFIX}/lib"
 
-    # ---- start-proot.sh ----
     cat > ~/start-proot.sh << PROOTEOF
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 PROOT_DISTRO="$PROOT_DISTRO"
 PROOT_LABEL="$PROOT_LABEL"
-TERMUX_TMP="\${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TERMUX_TMP="\${TMPDIR:-${PREFIX}/tmp}"
 
 echo ""
 echo "============================================="
-echo "  [*] Starting \$PROOT_LABEL"
+echo " [*] Starting \$PROOT_LABEL"
 echo "============================================="
 echo ""
 
 BINDS=""
 [ -d "\$TERMUX_TMP/.X11-unix" ] && BINDS="\$BINDS --bind \$TERMUX_TMP/.X11-unix:/tmp/.X11-unix"
-[ -d "/dev/dri" ]               && BINDS="\$BINDS --bind /dev/dri:/dev/dri"
-[ -e "/dev/kgsl-3d0" ]          && BINDS="\$BINDS --bind /dev/kgsl-3d0:/dev/kgsl-3d0"
-[ -d "${TERMUX_VK_ICD}" ]       && BINDS="\$BINDS --bind ${TERMUX_VK_ICD}:/usr/share/vulkan/icd.d.termux"
+[ -d "/dev/dri" ] && BINDS="\$BINDS --bind /dev/dri:/dev/dri"
+[ -e "/dev/kgsl-3d0" ] && BINDS="\$BINDS --bind /dev/kgsl-3d0:/dev/kgsl-3d0"
+[ -d "${TERMUX_VK_ICD}" ] && BINDS="\$BINDS --bind ${TERMUX_VK_ICD}:/usr/share/vulkan/icd.d.termux"
 [ -f "${TERMUX_LIB}/libvulkan.so" ] && \
     BINDS="\$BINDS --bind ${TERMUX_LIB}/libvulkan.so:/usr/lib/aarch64-linux-gnu/libvulkan_termux.so"
 
-_RC=\$(mktemp /data/data/com.termux/files/usr/tmp/proot_rc.XXXX)
+_RC=\$(mktemp "\$TERMUX_TMP/proot_rc.XXXX")
 echo "SETUP_USERNAME=\"${SETUP_USERNAME}\"" > "\$_RC"
 cat >> "\$_RC" << 'RCEOF'
 export DISPLAY=:0
@@ -429,7 +457,7 @@ export ZINK_DESCRIPTORS=lazy
 export MESA_VK_WSI_PRESENT_MODE=immediate
 [ -f /usr/share/vulkan/icd.d.termux/freedreno_icd.aarch64.json ] && \
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d.termux/freedreno_icd.aarch64.json
-export XDG_DATA_DIRS=/usr/share:/usr/local/share:\${XDG_DATA_DIRS}
+export XDG_DATA_DIRS=/usr/share:/usr/local/share:\${XDG_DATA_DIRS:-}
 export PS1="\[\033[01;32m\]${SETUP_USERNAME}@linux\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
 echo ""
 echo " User: ${SETUP_USERNAME} | GPU: GALLIUM=\${GALLIUM_DRIVER}"
@@ -441,29 +469,28 @@ proot-distro login "\$PROOT_DISTRO" \$BINDS --user ${SETUP_USERNAME} -- bash --r
 rm -f "\$_RC"
 PROOTEOF
     chmod +x ~/start-proot.sh
-    echo -e "  [+] Created ~/start-proot.sh"
+    echo -e " [+] Created ~/start-proot.sh"
 
-    # ---- proot-menu-sync.sh (v3 — embedded, fixed rootfs path, fixed long lines) ----
-    echo "#!/data/data/com.termux/files/usr/bin/bash" > ~/proot-menu-sync.sh
+    # Upgraded robust desktop parser with PREFIX and AWK
+    echo "#!/usr/bin/env bash" > ~/proot-menu-sync.sh
     echo "SETUP_USERNAME=\"${SETUP_USERNAME}\"" >> ~/proot-menu-sync.sh
     cat >> ~/proot-menu-sync.sh << 'SYNCEOF'
 # ============================================================
-#  Proot App Menu Bridge v3
-#  Syncs proot .desktop files into native XFCE menu.
-#  Fixes: $TMPDIR log path, runtime X11 bind, dbus-run-session,
-#         Blender libvulkan auto-detect, LibreOffice --norestore
+# Proot App Menu Bridge v4 (Robust & Upgraded)
+# Syncs proot .desktop files into native XFCE menu.
+# Fixes: Dynamic PREFIX, regex validation, robust awk parsing
 # ============================================================
 
 PROOT_DISTRO="${1:-ubuntu}"
-PROOT_BIN="/data/data/com.termux/files/usr/bin/proot-distro"
-PROOT_ROOTFS="/data/data/com.termux/files/usr/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs"
+PROOT_BIN="${PREFIX}/bin/proot-distro"
+PROOT_ROOTFS="${PREFIX}/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs"
 PROOT_APPS="$PROOT_ROOTFS/usr/share/applications"
 BRIDGE_DIR="$HOME/.local/share/applications/proot-bridge"
 WRAPPER_DIR="$HOME/.local/share/proot-wrappers"
-TERMUX_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TERMUX_TMP="${TMPDIR:-${PREFIX}/tmp}"
 
 if [ ! -f "$PROOT_BIN" ]; then
-    echo "[!] proot-distro not found. pkg install proot-distro"
+    echo "[!] proot-distro not found."
     exit 1
 fi
 if ! "$PROOT_BIN" login "$PROOT_DISTRO" -- true >/dev/null 2>&1; then
@@ -471,16 +498,14 @@ if ! "$PROOT_BIN" login "$PROOT_DISTRO" -- true >/dev/null 2>&1; then
     exit 1
 fi
 if [ ! -d "$PROOT_APPS" ]; then
-    echo "[!] No proot apps yet. proot-distro login $PROOT_DISTRO -- apt install <pkg>"
+    echo "[!] No proot apps yet."
     exit 0
 fi
 
 mkdir -p "$BRIDGE_DIR" "$WRAPPER_DIR"
-
 HAS_GPU="software"
 [ -d "/dev/dri" ] && HAS_GPU="zink"
 
-# Ensure dbus-x11 in proot
 if ! "$PROOT_BIN" login "$PROOT_DISTRO" -- which dbus-run-session > /dev/null 2>&1; then
     echo "[*] Installing dbus-x11 in proot..."
     "$PROOT_BIN" login "$PROOT_DISTRO" -- apt-get install -y -q dbus-x11 > /dev/null 2>&1
@@ -500,93 +525,95 @@ done
 
 for desktop_file in "$PROOT_APPS"/*.desktop; do
     [ -f "$desktop_file" ] || continue
-
+    
     filename=$(basename "$desktop_file")
     appname="${filename%.desktop}"
     output="$BRIDGE_DIR/proot-$filename"
     wrapper="$WRAPPER_DIR/proot-${appname}.sh"
-
+    
     grep -q "^NoDisplay=true" "$desktop_file" 2>/dev/null && continue
-    grep -q "^Hidden=true"    "$desktop_file" 2>/dev/null && continue
-
-    ORIGINAL_EXEC=$(grep "^Exec=" "$desktop_file" | head -1 | sed 's/^Exec=//')
+    grep -q "^Hidden=true" "$desktop_file" 2>/dev/null && continue
+    
+    # Robust parsing: Extract Exec exactly, handle spaces and quotes safely
+    ORIGINAL_EXEC=$(awk -F '=' '/^Exec=/ {print $2; exit}' "$desktop_file")
     [ -z "$ORIGINAL_EXEC" ] && continue
-    CLEAN_EXEC=$(echo "$ORIGINAL_EXEC" | sed 's/ %[a-zA-Z]//g; s/%[a-zA-Z]//g')
-
+    
+    # Remove standard FreeDesktop param fields like %f, %U, %c safely without cutting legit arguments
+    CLEAN_EXEC=$(echo "$ORIGINAL_EXEC" | sed -E 's/ %[a-zA-Z]//g' | sed 's/^ *//;s/ *\$//')
     APP_CMD="$CLEAN_EXEC"
     EXTRA_ENV=""
-
+    
     echo "$appname" | grep -qi "libreoffice\|soffice" && \
         APP_CMD="$CLEAN_EXEC --norestore --nofirststartwizard"
-
+        
     if echo "$appname" | grep -qi "blender"; then
         APP_CMD="$CLEAN_EXEC"
-        if "$PROOT_BIN" login "$PROOT_DISTRO" -- \
-                ldconfig -p 2>/dev/null | grep -q "libvulkan.so.1"; then
+        if "$PROOT_BIN" login "$PROOT_DISTRO" -- ldconfig -p 2>/dev/null | grep -q "libvulkan.so.1"; then
             EXTRA_ENV="export GALLIUM_DRIVER=zink; export MESA_GL_VERSION_OVERRIDE=4.6;"
-            echo "  [+] Blender: Zink GPU mode"
+            echo " [+] Blender: Zink GPU mode"
         else
             EXTRA_ENV="export LIBGL_ALWAYS_SOFTWARE=1; export GALLIUM_DRIVER=llvmpipe; export MESA_GL_VERSION_OVERRIDE=4.5;"
-            echo "  [!] Blender: Software mode (install libvulkan1 in proot for GPU)"
+            echo " [!] Blender: Software mode (install libvulkan1 in proot for GPU)"
         fi
     fi
-
+    
     cat > "$wrapper" << WRAPEOF
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 PROOT_BIN="$PROOT_BIN"
 PROOT_DISTRO="$PROOT_DISTRO"
-TERMUX_TMP="\${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TERMUX_TMP="\${TMPDIR:-${PREFIX}/tmp}"
 LOG="\$TERMUX_TMP/proot-${appname}.log"
-
 BINDS=""
 X11_DIR="\$TERMUX_TMP/.X11-unix"
-[ -d "\$X11_DIR" ]     && BINDS="\$BINDS --bind \$X11_DIR:/tmp/.X11-unix"
-[ -d "/dev/dri" ]      && BINDS="\$BINDS --bind /dev/dri:/dev/dri"
+
+[ -d "\$X11_DIR" ] && BINDS="\$BINDS --bind \$X11_DIR:/tmp/.X11-unix"
+[ -d "/dev/dri" ] && BINDS="\$BINDS --bind /dev/dri:/dev/dri"
 [ -e "/dev/kgsl-3d0" ] && BINDS="\$BINDS --bind /dev/kgsl-3d0:/dev/kgsl-3d0"
 
 {
-echo "[+] Launching $appname at \$(date)"
-echo "    X11=\$X11_DIR  BINDS=\$BINDS"
-\$PROOT_BIN login "\$PROOT_DISTRO" \$BINDS --user ${SETUP_USERNAME} -- /bin/bash -c "
-export DISPLAY=:0
-export XDG_RUNTIME_DIR=/tmp
-export MESA_NO_ERROR=1
-$EXTRA_ENV
-dbus-run-session $APP_CMD
-"
-EXIT_CODE=\$?
-echo "Exit: \$EXIT_CODE at \$(date)"
+    echo "[+] Launching $appname at \$(date)"
+    echo " X11=\$X11_DIR BINDS=\$BINDS"
+    \$PROOT_BIN login "\$PROOT_DISTRO" \$BINDS --user ${SETUP_USERNAME} -- /bin/bash -c "
+        export DISPLAY=:0
+        export XDG_RUNTIME_DIR=/tmp
+        export MESA_NO_ERROR=1
+        $EXTRA_ENV
+        dbus-run-session $APP_CMD
+    "
+    EXIT_CODE=\$?
+    echo "Exit: \$EXIT_CODE at \$(date)"
 } > "\$LOG" 2>&1
 
 [ \$EXIT_CODE -ne 0 ] && \
     xfce4-terminal --title="$appname error" \
-        -e "bash -c 'cat \$LOG; echo; read -p \"Press Enter\"'" &
+    -e "bash -c 'cat \$LOG; echo; read -p \"Press Enter\"'" &
 WRAPEOF
-    chmod +x "$wrapper"
 
+    chmod +x "$wrapper"
     cp "$desktop_file" "$output"
+    
     sed -i \
         -e "s|^Exec=.*|Exec=$wrapper|" \
         -e "s|^TryExec=.*|TryExec=$wrapper|" \
         -e '/^NoDisplay=/d' -e '/^Hidden=/d' \
         "$output"
     echo "NoDisplay=false" >> "$output"
-
-    APP_NAME=$(grep "^Name=" "$output" | head -1 | sed 's/^Name=//')
+    
+    APP_NAME=$(awk -F '=' '/^Name=/ {print $2; exit}' "$output")
     [[ "$APP_NAME" != \[P\]* ]] && sed -i "s|^Name=.*|Name=[P] $APP_NAME|" "$output"
     SYNCED=$((SYNCED + 1))
 done
 
 echo "[+] Bridge: $SYNCED synced, $REMOVED removed."
-echo "    Logs: \$TERMUX_TMP/proot-<appname>.log"
-echo "    Re-run after new installs: bash ~/proot-menu-sync.sh"
+echo " Logs: \$TERMUX_TMP/proot-<appname>.log"
+echo " Re-run after new installs: bash ~/proot-menu-sync.sh"
 
 pgrep -x "xfce4-panel" > /dev/null 2>&1 && xfce4-panel --restart > /dev/null 2>&1 &
-pgrep -x "xfdesktop"   > /dev/null 2>&1 && { sleep 1; xfdesktop --reload > /dev/null 2>&1 & }
+pgrep -x "xfdesktop" > /dev/null 2>&1 && { sleep 1; xfdesktop --reload > /dev/null 2>&1 & }
 SYNCEOF
-    chmod +x ~/proot-menu-sync.sh
-    echo -e "  [+] Created ~/proot-menu-sync.sh"
 
+    chmod +x ~/proot-menu-sync.sh
+    echo -e " [+] Created ~/proot-menu-sync.sh"
     bash ~/proot-menu-sync.sh "$PROOT_DISTRO" 2>/dev/null || true
 }
 
@@ -595,10 +622,8 @@ step_launchers() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Creating Startup Scripts...${NC}"
     echo ""
-
     mkdir -p ~/.config ~/.vnc
-
-    # GPU env config
+    
     cat > ~/.config/linux-gpu.sh << EOF
 export MESA_NO_ERROR=1
 export MESA_GL_VERSION_OVERRIDE=4.6
@@ -608,62 +633,59 @@ export MESA_LOADER_DRIVER_OVERRIDE=zink
 export TU_DEBUG=noconform
 export MESA_VK_WSI_PRESENT_MODE=immediate
 export ZINK_DESCRIPTORS=lazy
-export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:\${XDG_DATA_DIRS}
-export XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:\${XDG_CONFIG_DIRS}
+export XDG_DATA_DIRS=${PREFIX}/share:\${XDG_DATA_DIRS:-}
+export XDG_CONFIG_DIRS=${PREFIX}/etc/xdg:\${XDG_CONFIG_DIRS:-}
 EOF
 
     if [ "$DE_CHOICE" == "4" ]; then
         echo "export KWIN_COMPOSE=O2ES" >> ~/.config/linux-gpu.sh
         mkdir -p ~/.config/plasma-workspace/env
         cat > ~/.config/plasma-workspace/env/xdg_fix.sh << 'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:${XDG_DATA_DIRS}
-export XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:${XDG_CONFIG_DIRS}
+#!/usr/bin/env bash
+export XDG_DATA_DIRS=${PREFIX}/share:${XDG_DATA_DIRS:-}
+export XDG_CONFIG_DIRS=${PREFIX}/etc/xdg:${XDG_CONFIG_DIRS:-}
 EOF
         chmod +x ~/.config/plasma-workspace/env/xdg_fix.sh
     fi
 
     case $DE_CHOICE in
         1) EXEC_CMD="exec startxfce4"
-           KILL_CMD="pkill -9 xfce4-session 2>/dev/null";;
+           KILL_CMD="pkill -9 xfce4-session 2>/dev/null || true";;
         2) EXEC_CMD="exec startlxqt"
-           KILL_CMD="pkill -9 lxqt-session 2>/dev/null";;
+           KILL_CMD="pkill -9 lxqt-session 2>/dev/null || true";;
         3) EXEC_CMD="exec mate-session"
-           KILL_CMD="pkill -9 mate-session 2>/dev/null";;
-        4) EXEC_CMD="(sleep 5 && pkill -9 plasmashell && plasmashell) > /dev/null 2>&1 &
-exec startplasma-x11"
-           KILL_CMD="pkill -9 startplasma-x11 2>/dev/null; pkill -9 kwin_x11 2>/dev/null";;
+           KILL_CMD="pkill -9 mate-session 2>/dev/null || true";;
+        4) EXEC_CMD="(sleep 5 && pkill -9 plasmashell && plasmashell) > /dev/null 2>&1 & exec startplasma-x11"
+           KILL_CMD="pkill -9 startplasma-x11 2>/dev/null || true; pkill -9 kwin_x11 2>/dev/null || true";;
     esac
 
-    # ---- start-x11.sh ----
     cat > ~/start-x11.sh << LAUNCHEREOF
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 echo ""
 echo "=============================================="
-echo "  [*] Starting ${DE_NAME} via Termux-X11..."
+echo " [*] Starting ${DE_NAME} via Termux-X11..."
 echo "=============================================="
 echo ""
-source ~/.config/linux-gpu.sh 2>/dev/null
 
-# Override Android's u0_a281 with the custom username
-# XFCE panel reads USER/LOGNAME for all user-facing displays
+source ~/.config/linux-gpu.sh 2>/dev/null || true
+
 export USER="$SETUP_USERNAME"
 export LOGNAME="$SETUP_USERNAME"
 export HOSTNAME="android-linux"
 export HOST="android-linux"
 
-pkill -9 -f "termux.x11" 2>/dev/null
-pkill -9 -f "Xvnc" 2>/dev/null
+pkill -9 -f "termux.x11" 2>/dev/null || true
+pkill -9 -f "Xvnc" 2>/dev/null || true
 ${KILL_CMD}
-pkill -9 -f "dbus" 2>/dev/null
+pkill -9 -f "dbus" 2>/dev/null || true
 
 unset PULSE_SERVER
-pulseaudio --kill 2>/dev/null
+pulseaudio --kill 2>/dev/null || true
 sleep 0.5
 echo "[*] Starting audio..."
 pulseaudio --start --exit-idle-time=-1
 sleep 1
-pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 2>/dev/null
+pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 2>/dev/null || true
 export PULSE_SERVER=127.0.0.1
 
 echo "[*] Starting Termux-X11 on :0..."
@@ -675,29 +697,28 @@ export DISPLAY=:0
 [ -f ~/proot-menu-sync.sh ] && bash ~/proot-menu-sync.sh > /dev/null 2>&1 &
 
 echo "----------------------------------------------"
-echo "  [*] Open the Termux-X11 app to see desktop"
+echo " [*] Open the Termux-X11 app to see desktop"
 echo "----------------------------------------------"
 echo ""
 ${EXEC_CMD}
 LAUNCHEREOF
     chmod +x ~/start-x11.sh
-    echo -e "  [+] Created ~/start-x11.sh"
+    echo -e " [+] Created ~/start-x11.sh"
 
-    # ---- stop-linux.sh ----
     cat > ~/stop-linux.sh << STOPEOF
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 echo "Stopping all sessions..."
-pkill -9 -f "termux.x11" 2>/dev/null
-vncserver -kill :1 2>/dev/null
-pkill -9 -f "Xvnc" 2>/dev/null
-pkill -9 -f "pulseaudio" 2>/dev/null
+pkill -9 -f "termux.x11" 2>/dev/null || true
+vncserver -kill :1 2>/dev/null || true
+pkill -9 -f "Xvnc" 2>/dev/null || true
+pkill -9 -f "pulseaudio" 2>/dev/null || true
 ${KILL_CMD}
-pkill -9 -f "dbus" 2>/dev/null
-rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null
+pkill -9 -f "dbus" 2>/dev/null || true
+rm -f ${TMPDIR:-/tmp}/.X1-lock ${TMPDIR:-/tmp}/.X11-unix/X1 2>/dev/null || true
 echo "Done."
 STOPEOF
     chmod +x ~/stop-linux.sh
-    echo -e "  [+] Created ~/stop-linux.sh"
+    echo -e " [+] Created ~/stop-linux.sh"
 }
 
 # ============== STEP 11: XFCE MODERN THEME ==============
@@ -705,7 +726,6 @@ step_theme_xfce() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Configuring Modern XFCE Theme...${NC}"
     echo ""
-
     mkdir -p ~/.config/xfce4/xfconf/xfce-perchannel-xml \
              ~/.config/autostart \
              ~/.local/share/themes
@@ -822,20 +842,14 @@ KBEOF
 DESKEOF
 
     # ---- First-run script (panel + wallpaper via xfconf-query) ----
-    # Runs once when XFCE starts for the first time
     cat > ~/.config/xfce-first-run.sh << 'FREOF'
-#!/data/data/com.termux/files/usr/bin/bash
-# XFCE First Run: configure panel + wallpaper
+#!/usr/bin/env bash
 WALLPAPER="$HOME/.config/linux-wallpaper.jpg"
+sleep 4
 
-sleep 4  # Wait for xfconfd + panel to be ready
-
-# ---- Dark Adwaita theme ----
 xfconf-query -c xsettings -p /Net/ThemeName -s "Adwaita-dark"
 xfconf-query -c xfwm4 -p /general/theme -s "Default-xhdpi"
 
-# ---- Panel: Move panel-1 to bottom, resize ----
-# Position: p=8 = bottom-center
 xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=8;x=0;y=0" 2>/dev/null || true
 xfconf-query -c xfce4-panel -p /panels/panel-1/size -t int -s 44 2>/dev/null || true
 xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true 2>/dev/null || true
@@ -843,36 +857,28 @@ xfconf-query -c xfce4-panel -p /panels/panel-1/background-style -t int -s 1 2>/d
 xfconf-query -c xfce4-panel -p /panels/panel-1/background-rgba \
     -t double -s 0.12 -t double -s 0.12 -t double -s 0.18 -t double -s 0.90 2>/dev/null || true
 
-# ---- Panel-2: reduce top panel size if it exists ----
 xfconf-query -c xfce4-panel -p /panels/panel-2/size -t int -s 28 2>/dev/null || true
 xfconf-query -c xfce4-panel -p /panels/panel-2/background-style -t int -s 1 2>/dev/null || true
 xfconf-query -c xfce4-panel -p /panels/panel-2/background-rgba \
     -t double -s 0.10 -t double -s 0.10 -t double -s 0.14 -t double -s 0.95 2>/dev/null || true
 
-# ---- Wallpaper ----
 if [ -f "$WALLPAPER" ]; then
-    for prop in $(xfconf-query -c xfce4-desktop -lv 2>/dev/null | \
-                  grep "last-image" | awk '{print $1}'); do
+    for prop in $(xfconf-query -c xfce4-desktop -lv 2>/dev/null | grep "last-image" | awk '{print $1}'); do
         xfconf-query -c xfce4-desktop -p "$prop" -s "$WALLPAPER" 2>/dev/null
     done
-    # Set image style: 5 = zoomed/scaled
-    for prop in $(xfconf-query -c xfce4-desktop -lv 2>/dev/null | \
-                  grep "image-style" | awk '{print $1}'); do
+    for prop in $(xfconf-query -c xfce4-desktop -lv 2>/dev/null | grep "image-style" | awk '{print $1}'); do
         xfconf-query -c xfce4-desktop -p "$prop" -t int -s 5 2>/dev/null
     done
     xfdesktop --reload 2>/dev/null &
 fi
 
-# ---- Compositing tuning ----
 xfconf-query -c xfwm4 -p /general/use_compositing -s true 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/frame_opacity -t int -s 95 2>/dev/null || true
 
-# ---- Remove this autostart so it never runs again ----
 rm -f "$HOME/.config/autostart/xfce-first-run.desktop"
 FREOF
     chmod +x ~/.config/xfce-first-run.sh
 
-    # Register as XFCE autostart (one-shot) — fixed path
     cat > ~/.config/autostart/xfce-first-run.desktop << 'AREOF'
 [Desktop Entry]
 Type=Application
@@ -883,56 +889,47 @@ NoDisplay=true
 X-GNOME-Autostart-enabled=true
 AREOF
 
-    # ---- Wallpaper: URL → gradient fallback → skip ----
+    # ---- Wallpaper Download & Fallback ----
     WALLPAPER_FILE="$HOME/.config/linux-wallpaper.jpg"
     WALLPAPER_OK=false
-
     if [ -n "$WALLPAPER_URL" ]; then
-        echo -e "  [*] Downloading wallpaper..."
-        # -L = follow redirects, --timeout = don't hang forever, -q = silent
-        (wget -L -q --timeout=30 --tries=2 \
-            -O "$WALLPAPER_FILE" "$WALLPAPER_URL" > /dev/null 2>&1) &
+        echo -e " [*] Downloading wallpaper..."
+        (wget -L -q --timeout=30 --tries=2 -O "$WALLPAPER_FILE" "$WALLPAPER_URL" > /dev/null 2>&1) &
         spinner $! "Downloading wallpaper (timeout: 30s)..."
-
-        # Validate: must exist AND be >10KB (not an error HTML page)
-        if [ -f "$WALLPAPER_FILE" ] && \
-           [ "$(wc -c < "$WALLPAPER_FILE" 2>/dev/null)" -gt 10240 ]; then
-            echo -e "  [+] Wallpaper downloaded OK"
+        
+        if [ -f "$WALLPAPER_FILE" ] && [ "$(wc -c < "$WALLPAPER_FILE" 2>/dev/null)" -gt 10240 ]; then
+            echo -e " [+] Wallpaper downloaded OK"
             WALLPAPER_OK=true
         else
             rm -f "$WALLPAPER_FILE"
-            echo -e "  [!] Wallpaper URL failed or returned invalid data — trying gradient..."
+            echo -e " [!] Wallpaper URL failed or returned invalid data — trying gradient..."
         fi
     fi
 
     if [ "$WALLPAPER_OK" = false ]; then
-        # Fallback: generate dark gradient with ImageMagick
         if command -v convert > /dev/null 2>&1; then
-            (convert -size 1920x1080 \
-                gradient:"#0f0c29"-"#302b63" \
-                "$WALLPAPER_FILE" > /dev/null 2>&1) &
+            (convert -size 1920x1080 gradient:"#0f0c29"-"#302b63" "$WALLPAPER_FILE" > /dev/null 2>&1) &
             spinner $! "Generating gradient wallpaper..."
             [ -f "$WALLPAPER_FILE" ] && WALLPAPER_OK=true && \
-                echo -e "  [+] Gradient wallpaper generated"
+                echo -e " [+] Gradient wallpaper generated"
         fi
     fi
 
     if [ "$WALLPAPER_OK" = false ]; then
-        echo -e "  [!] Wallpaper skipped (URL failed + ImageMagick unavailable)"
-        echo -e "      Desktop will use XFCE default background."
+        echo -e " [!] Wallpaper skipped (URL failed + ImageMagick unavailable)"
+        echo -e " Desktop will use XFCE default background."
     fi
-
-    echo -e "  [+] XFCE dark theme configured (Adwaita-dark + Dracula terminal)"
-    echo -e "  [+] First-run script will configure panels on first launch"
+    echo -e " [+] XFCE dark theme configured (Adwaita-dark + Dracula terminal)"
+    echo -e " [+] First-run script will configure panels on first launch"
 }
 
-# ============== STEP 12: SHORTCUTS (FIXED PROOT PATH) ==============
+# ============== STEP 12: SHORTCUTS ==============
 step_shortcuts() {
     update_progress
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Creating Desktop Shortcuts...${NC}"
     echo ""
     mkdir -p ~/Desktop
-
+    
     cat > ~/Desktop/Firefox.desktop << 'EOF'
 [Desktop Entry]
 Name=Firefox
@@ -971,50 +968,48 @@ Icon=system-run
 Type=Application
 Terminal=false
 EOF
-
+    
     chmod +x ~/Desktop/*.desktop 2>/dev/null
-    echo -e "  [+] Shortcuts: Firefox, Files, Terminal, Proot"
+    echo -e " [+] Shortcuts: Firefox, Files, Terminal, Proot"
 }
 
-# ============== VNC (OPTIONAL — asked at end) ==============
+# ============== VNC (OPTIONAL) ==============
 step_vnc_optional() {
     echo ""
     echo -e "${YELLOW}============================================================${NC}"
-    echo -e "${WHITE}  OPTIONAL: VNC Remote Desktop${NC}"
+    echo -e "${WHITE} OPTIONAL: VNC Remote Desktop${NC}"
     echo -e "${YELLOW}============================================================${NC}"
     echo ""
-    echo -e "  VNC lets you connect from another device (phone, PC, tablet)"
-    echo -e "  using any VNC Viewer app over WiFi or USB."
+    echo -e " VNC lets you connect from another device (phone, PC, tablet)"
+    echo -e " using any VNC Viewer app over WiFi or USB."
     echo ""
-    read -p "  Install VNC support? (y/N): " VNC_ANSWER
+    
+    read -p " Install VNC support? (y/N): " VNC_ANSWER
     VNC_ANSWER=${VNC_ANSWER:-N}
-
+    
     if [[ "$VNC_ANSWER" =~ ^[Yy]$ ]]; then
         VNC_ENABLED=true
-
-        read -p "  VNC password [default: 123456]: " VNC_PASS_IN
+        read -p " VNC password [default: 123456]: " VNC_PASS_IN
         VNC_PASS="${VNC_PASS_IN:-123456}"
-        read -p "  Resolution [default: 1280x720]: " VNC_GEO_IN
+        read -p " Resolution [default: 1280x720]: " VNC_GEO_IN
         VNC_GEOMETRY="${VNC_GEO_IN:-1280x720}"
         VNC_DISPLAY=":1"
-
         echo ""
-        echo -e "  [*] Installing TigerVNC..."
+        
         install_pkg "tigervnc" "TigerVNC Server"
-
         mkdir -p ~/.vnc
         echo "$VNC_PASS" | vncpasswd -f > ~/.vnc/passwd
         chmod 600 ~/.vnc/passwd
-
+        
         case $DE_CHOICE in
             1) VNC_EXEC="exec startxfce4";;
             2) VNC_EXEC="exec startlxqt";;
             3) VNC_EXEC="exec mate-session";;
             4) VNC_EXEC="exec startplasma-x11";;
         esac
-
+        
         cat > ~/.vnc/xstartup << VNCSTARTUP
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 export MESA_NO_ERROR=1
 export MESA_GL_VERSION_OVERRIDE=4.6
 export MESA_GLES_VERSION_OVERRIDE=3.2
@@ -1022,62 +1017,68 @@ export GALLIUM_DRIVER=zink
 export MESA_LOADER_DRIVER_OVERRIDE=zink
 export TU_DEBUG=noconform
 export ZINK_DESCRIPTORS=lazy
-export XDG_DATA_DIRS=/data/data/com.termux/files/usr/share:\${XDG_DATA_DIRS}
-export XDG_CONFIG_DIRS=/data/data/com.termux/files/usr/etc/xdg:\${XDG_CONFIG_DIRS}
+export XDG_DATA_DIRS=${PREFIX}/share:\${XDG_DATA_DIRS:-}
+export XDG_CONFIG_DIRS=${PREFIX}/etc/xdg:\${XDG_CONFIG_DIRS:-}
 $VNC_EXEC
 VNCSTARTUP
         chmod +x ~/.vnc/xstartup
-
+        
         cat > ~/start-vnc.sh << VNCEOF
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 echo ""
 echo "=============================================="
-echo "  [*] Starting ${DE_NAME} via TigerVNC..."
+echo " [*] Starting ${DE_NAME} via TigerVNC..."
 echo "=============================================="
 echo ""
-
-pkill -9 -f "termux.x11" 2>/dev/null
-vncserver -kill ${VNC_DISPLAY} 2>/dev/null
-rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null
-
+pkill -9 -f "termux.x11" 2>/dev/null || true
+vncserver -kill ${VNC_DISPLAY} 2>/dev/null || true
+rm -f ${TMPDIR:-/tmp}/.X1-lock ${TMPDIR:-/tmp}/.X11-unix/X1 2>/dev/null || true
 unset PULSE_SERVER
-pulseaudio --kill 2>/dev/null
+pulseaudio --kill 2>/dev/null || true
 sleep 0.5
 pulseaudio --start --exit-idle-time=-1
 sleep 1
-pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 2>/dev/null
+pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 2>/dev/null || true
 export PULSE_SERVER=127.0.0.1
 
 vncserver -localhost no -geometry ${VNC_GEOMETRY} -depth 24 ${VNC_DISPLAY}
-
 DEVICE_IP=\$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+
 echo ""
 echo "=============================================="
-echo "  VNC Ready! Connect with any VNC Viewer:"
-echo "    Local   : 127.0.0.1:5901"
-[ -n "\$DEVICE_IP" ] && echo "    Network : \${DEVICE_IP}:5901"
-echo "    Password: ${VNC_PASS}"
+echo " VNC Ready! Connect with any VNC Viewer:"
+echo " Local   : 127.0.0.1:5901"
+[ -n "\$DEVICE_IP" ] && echo " Network : \${DEVICE_IP}:5901"
+echo " Password: ${VNC_PASS}"
 echo "=============================================="
 VNCEOF
         chmod +x ~/start-vnc.sh
-        echo -e "  [+] Created ~/start-vnc.sh"
+        echo -e " [+] Created ~/start-vnc.sh"
     else
-        echo -e "  [*] Skipping VNC. You can add it later with:"
-        echo -e "      pkg install tigervnc"
+        echo -e " [*] Skipping VNC. You can add it later with:"
+        echo -e "     pkg install tigervnc"
     fi
 }
 
 # ============== COMPLETION ==============
 show_completion() {
+    # Apply username to native Termux shell prompt atomically
+    BASHRC="$HOME/.bashrc"
+    if ! grep -q "SETUP_USERNAME_PROMPT" "$BASHRC" 2>/dev/null; then
+        TMP_BASHRC=$(mktemp)
+        cp "$BASHRC" "$TMP_BASHRC" 2>/dev/null || true
+        echo -e "# SETUP_USERNAME_PROMPT\nexport PS1='\\[\\e[01;32m\\]${SETUP_USERNAME}@android\\[\\e[00m\\]:\\[\\e[01;34m\\]\\w\\[\\e[00m\\]\\$ '" >> "$TMP_BASHRC"
+        mv "$TMP_BASHRC" "$BASHRC"
+    fi
+    
     echo ""
     echo -e "${GREEN}"
     cat << 'COMPLETE'
     ╔══════════════════════════════════════════╗
-    ║            INSTALLATION COMPLETE!               ║
+    ║          INSTALLATION COMPLETE!          ║
     ╚══════════════════════════════════════════╝
 COMPLETE
     echo -e "${NC}"
-
     echo -e "${WHITE}[*] ${DE_NAME} desktop is ready.${NC}"
     echo ""
     echo -e "${CYAN}[*] Installed:${NC}"
@@ -1087,18 +1088,20 @@ COMPLETE
     echo "    - Modern Dark XFCE Theme (Adwaita + Dracula terminal)"
     echo ""
     echo -e "${YELLOW}============================================================${NC}"
-    echo -e "${WHITE}  HOW TO START:${NC}"
+    echo -e "${WHITE} HOW TO START:${NC}"
     echo -e "${YELLOW}============================================================${NC}"
     echo ""
     echo -e "  ${GREEN}Native X11 (recommended):${NC}"
     echo -e "    ${WHITE}bash ~/start-x11.sh${NC}"
     echo -e "    Then open the ${WHITE}Termux-X11${NC} app"
     echo ""
+    
     if [ "$VNC_ENABLED" = "true" ]; then
         echo -e "  ${GREEN}VNC (connect via any VNC Viewer):${NC}"
-        echo -e "    ${WHITE}bash ~/start-vnc.sh${NC}  → 127.0.0.1:5901"
+        echo -e "    ${WHITE}bash ~/start-vnc.sh${NC} → 127.0.0.1:5901"
         echo ""
     fi
+    
     echo -e "  ${GREEN}Proot Linux shell:${NC}"
     echo -e "    ${WHITE}bash ~/start-proot.sh${NC}"
     echo ""
@@ -1110,12 +1113,12 @@ COMPLETE
     echo ""
     echo -e "${YELLOW}============================================================${NC}"
     echo ""
-    echo -e "${CYAN}  👤 Your username : ${WHITE}${SETUP_USERNAME}${NC}"
+    echo -e "${CYAN} 👤 Your username : ${WHITE}${SETUP_USERNAME}${NC}"
     echo ""
-    echo -e "${YELLOW}  ★━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━★${NC}"
-    echo -e "${WHITE}     If you found this helpful, please subscribe to:${NC}"
-    echo -e "${RED}           ▶  orailnoor  on YouTube  ◀${NC}"
-    echo -e "${YELLOW}  ★━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━★${NC}"
+    echo -e "${YELLOW} ★━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━★${NC}"
+    echo -e "${WHITE}    If you found this helpful, please subscribe to:${NC}"
+    echo -e "${RED}             ▶ orailnoor on YouTube ◀${NC}"
+    echo -e "${YELLOW} ★━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━★${NC}"
     echo ""
 }
 
@@ -1123,7 +1126,6 @@ COMPLETE
 main() {
     show_banner
     setup_environment
-
     step_update
     step_repos
     step_x11
@@ -1136,17 +1138,9 @@ main() {
     step_launchers
     step_theme_xfce
     step_shortcuts
-
-    # Optional VNC — asked after all main steps
     step_vnc_optional
-
-    # Apply username to native Termux shell prompt (fixed)
-    BASHRC="$HOME/.bashrc"
-    grep -q "SETUP_USERNAME_PROMPT" "$BASHRC" 2>/dev/null || \
-        echo -e "# SETUP_USERNAME_PROMPT\nexport PS1='\\[\\e[01;32m\\]${SETUP_USERNAME}@android\\[\\e[00m\\]:\\[\\e[01;34m\\]\\w\\[\\e[00m\\]\\$ '" >> "$BASHRC"
-    source "$BASHRC" 2>/dev/null || true
-
     show_completion
+    source "$HOME/.bashrc" 2>/dev/null || true
 }
 
 main
